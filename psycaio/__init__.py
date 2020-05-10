@@ -5,7 +5,7 @@ from asyncio import TimeoutError
 try:
     from asyncio import get_running_loop, wait_for
 except ImportError:
-    from asyncio import get_event_loop as get_running_loop
+    from asyncio import get_event_loop as get_running_loop, wait_for
 
 from psycopg2 import connect as pg_connect, OperationalError
 from psycopg2.extensions import (
@@ -83,24 +83,20 @@ class AioConnection(connection):
         try:
             state = self.poll()
         except Exception as ex:
-            print("POLL_EXC")
             self._fut.set_exception(ex)
             return
 
         if state == POLL_OK:
-            print("POLL_OK")
             self._fut.set_result(True)
             return
 
-        loop = self._fut.get_loop()
+        loop = get_running_loop()
         fd = self.fileno()
         if state == POLL_READ:
-            print("POLL_READ")
             self._remove_fileno = loop.remove_reader
             loop.add_reader(fd, self._io_ready)
         elif state == POLL_WRITE:
             self._remove_fileno = loop.remove_writer
-            print("POLL_WRITE")
             loop.add_writer(fd, self._io_ready)
         else:
             self._fut.set_exception(
