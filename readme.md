@@ -5,6 +5,8 @@ A Python asyncio wrapper around psycopg2
 ## Example
 
 ```Python
+import asyncio
+
 from psycaio import connect
 
 
