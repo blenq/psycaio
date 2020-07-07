@@ -43,3 +43,5 @@ sending and receiving of data is handled in a non blocking fashion by libpq.
 
 Because of this approach, it doesn't work with the proactor event loop
 (Windows). The SelectorEventLoop on Windows should work.
+Work is in progress to implement a solution for the proactor event loop, by
+just running all blocking functions in a threadpool using run_in_exectutor.
