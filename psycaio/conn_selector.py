@@ -1,12 +1,11 @@
 from asyncio import Lock
 try:
     from asyncio import get_running_loop
-except ImportError:
+except ImportError:  # pragma: no cover
     from asyncio import get_event_loop as get_running_loop
 
-from psycopg2 import OperationalError
+from psycopg2 import OperationalError, ProgrammingError
 from psycopg2.extensions import (
-    connection,
     ISOLATION_LEVEL_DEFAULT, ISOLATION_LEVEL_READ_COMMITTED,
     ISOLATION_LEVEL_REPEATABLE_READ, ISOLATION_LEVEL_SERIALIZABLE,
     ISOLATION_LEVEL_READ_UNCOMMITTED,
@@ -16,14 +15,16 @@ from psycopg2.extensions import (
 from .cursor_selector import SelectorAioCursorMixin
 
 
-class AioConnection(connection):
+class SelectorAioConnMixin:
     """ override to restore dbapi transaction behaviour and add asyncio
     behaviour
 
     """
+    _cursor_check_type = SelectorAioCursorMixin
+    _loop_type = 'selector'
 
     def __init__(self, *args, **kwargs):
-        self._loop = get_running_loop()
+        self._loop = None
         self._poll_state = None
 
         super().__init__(*args, **kwargs)
@@ -46,6 +47,9 @@ class AioConnection(connection):
 
     @isolation_level.setter
     def isolation_level(self, level):
+        if self.info.transaction_status != TRANSACTION_STATUS_IDLE:
+            raise ProgrammingError(
+                "set_session cannot be used inside a transaction")
         if level is None:
             self._isolation_level = ISOLATION_LEVEL_DEFAULT
             return
@@ -70,7 +74,8 @@ class AioConnection(connection):
                     self._isolation_level = level_value
                     return
 
-        raise ValueError(f"bad value for isolation_level: '{level}'")
+            raise ValueError(f"bad value for isolation_level: '{level}'")
+        raise TypeError("Expected bytes or unicode string, got object instead")
 
     def _transaction_command(self):
         if (self.autocommit or
@@ -87,14 +92,6 @@ class AioConnection(connection):
             }[self.isolation_level])
         return ' '.join(cmd)
 
-    def cursor(self, *args, **kwargs):
-        """ Override to add type check """
-        cr = super().cursor(*args, **kwargs)
-        if not isinstance(cr, SelectorAioCursorMixin):
-            raise OperationalError(
-                "cursor_factory must return an instance of AioCursorMixin")
-        return cr
-
     async def commit(self):
         async with self._execute_lock:
             await self.cursor()._execute("COMMIT")
@@ -103,20 +100,18 @@ class AioConnection(connection):
         async with self._execute_lock:
             await self.cursor()._execute("ROLLBACK")
 
-    async def cancel(self):
-        await self._loop.run_in_executor(None, super().cancel)
-
     def _start_connect_poll(self):
         """ Starts polling after connect """
-
-        fut = self._fut = self._loop.create_future()
+        loop = self._loop = get_running_loop()
+        fut = self._fut = loop.create_future()
         self._connect_poll()
         return fut
 
     def _start_exec_poll(self):
         """ Starts polling after execute """
 
-        fut = self._fut = self._loop.create_future()
+        loop = self._loop = get_running_loop()
+        fut = self._fut = loop.create_future()
         self._exec_poll()
         return fut
 
@@ -199,7 +194,7 @@ class AioConnection(connection):
         self._poll_state = None
         if poll_state == POLL_WRITE:
             self._loop.remove_writer(self._fd)
-        elif poll_state == POLL_READ:
+        else:
             self._loop.remove_reader(self._fd)
 
     def close(self):
@@ -207,5 +202,5 @@ class AioConnection(connection):
         super().close()
 
     def __del__(self):
-        if not self._loop.is_closed():
+        if self._loop and not self._loop.is_closed():
             self._reset_io()

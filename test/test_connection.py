@@ -9,13 +9,27 @@ except ImportError:
 
 from psycopg2 import OperationalError
 
-from psycaio import connect, AioConnection
+from psycaio import connect as psycaio_connect, AioConnection
+from psycaio.conn_proactor_connect import connect as proactor_connect
 
-# from .loops import create_loop_testcases
-from .loops import loop_classes
+from test.loops import loop_classes, uses_proactor
+
+connect = psycaio_connect
 
 
 class ConnTestCase(IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        cls = type(self)
+        if cls.__name__.startswith("ForcedProactor"):
+            global connect
+            connect = proactor_connect
+        super().setUp()
+
+    def tearDown(self):
+        global connect
+        connect = psycaio_connect
+        super().tearDown()
 
     async def test_connect(self):
         cn = await connect(dbname='postgres')
@@ -86,12 +100,15 @@ class ConnTestCase(IsolatedAsyncioTestCase):
             await connect(dbname='postgres', connection_factory=BadConn)
 
     async def test_cancellation(self):
-
+        if uses_proactor(connect):
+            self.skipTest("Proactor loop")
         with self.assertRaises(TimeoutError):
             await wait_for(
                 connect(dbname='postgres', host='www.example.com'), 0.1)
 
     async def test_unexpected_poll(self):
+        if uses_proactor(connect):
+            self.skipTest("Proactor loop")
         cn = await connect(dbname="postgres")
         cn._try_poll = lambda: 5
         with self.assertRaises(OperationalError):

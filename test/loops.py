@@ -3,6 +3,14 @@
 # For now that is the available loops in the stdlib and uvloop
 
 import asyncio
+from asyncio.proactor_events import BaseProactorEventLoop
+
+try:
+    from asyncio import get_running_loop
+except ImportError:
+    from asyncio import get_event_loop as get_running_loop
+
+from psycaio.conn_proactor_connect import connect as proactor_connect
 
 policies = []
 
@@ -18,8 +26,13 @@ except ImportError:
     pass
 
 if not policies:
-    # so, not on Windows, use the default loop
+    # so, not on Windows, use the default (selector) loop
     policies.append(("DefaultLoop", asyncio.DefaultEventLoopPolicy))
+    # The proactor version of psycaio is just delegating all blocking
+    # operations to the default thread pool.
+    # This is able to run fine on the selector loop as well, so we add this
+    # policy to be able to test the proactor version on a non windows platform
+    policies.append(("ForcedProactor", asyncio.DefaultEventLoopPolicy))
 
 # try to add uvloop as well, if available
 try:
@@ -45,3 +58,8 @@ def loop_classes(cls):
             policy_name + cls.__name__, (ExplicitLoopMixin, cls), {})
         new_cls.loop_policy = policy
         yield new_cls
+
+
+def uses_proactor(connect_func):
+    return (isinstance(get_running_loop(), BaseProactorEventLoop) or
+            connect_func is proactor_connect)

@@ -1,17 +1,13 @@
-from asyncio import CancelledError
+try:
+    from asyncio import get_running_loop
+except ImportError:  # pragma: no cover
+    from asyncio import get_event_loop as get_running_loop
 from functools import partial
 
 
 class ProactorAioCursorMixin:
 
     async def execute(self, *args, **kwargs):
-        async with self.connection._execute_lock:
-            func = partial(super().execute, *args, **kwargs)
-            try:
-                await self.connection._loop.run_in_executor(None, func)
-            except CancelledError:
-                try:
-                    await self.connection.cancel()
-                except Exception:
-                    pass
-                raise
+        func = partial(super().execute, *args, **kwargs)
+        fut = get_running_loop().run_in_executor(None, func)
+        await self._wait_for_execute(fut)

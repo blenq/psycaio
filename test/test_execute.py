@@ -13,12 +13,27 @@ from psycopg2.extensions import (
     ISOLATION_LEVEL_DEFAULT)
 from psycopg2.extras import DictCursor
 
-from psycaio import connect, AioCursorMixin
+from psycaio import connect as psycaio_connect, AioCursorMixin
+from psycaio.conn_proactor_connect import connect as proactor_connect
 
 from .loops import loop_classes
 
+connect = psycaio_connect
+
 
 class ExecTestCase(IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        cls = type(self)
+        if cls.__name__.startswith("ForcedProactor"):
+            global connect
+            connect = proactor_connect
+        super().setUp()
+
+    def tearDown(self):
+        global connect
+        connect = psycaio_connect
+        super().tearDown()
 
     async def asyncSetUp(self):
         self.cn = await connect(dbname="postgres")
@@ -77,10 +92,17 @@ class ExecTestCase(IsolatedAsyncioTestCase):
         await self.cr.execute("SHOW TRANSACTION ISOLATION LEVEL")
         self.assertEqual(self.cr.fetchone()[0], default_level)
 
+        with self.assertRaises(ProgrammingError):
+            self.cn.isolation_level = "DEFAULT"
+
+        await self.cn.rollback()
         with self.assertRaises(ValueError):
             self.cn.isolation_level = 6
 
         with self.assertRaises(ValueError):
+            self.cn.isolation_level = "nonsense"
+
+        with self.assertRaises(TypeError):
             self.cn.isolation_level = object()
 
     async def test_long_result(self):
@@ -111,6 +133,10 @@ class ExecTestCase(IsolatedAsyncioTestCase):
             pass
 
         cr = self.cn.cursor(cursor_factory=AioDictCursor)
+        await cr.execute("SELECT 48 as value")
+        self.assertEqual(cr.fetchone()['value'], 48)
+
+        cr = (await connect(dbname="postgres", cursor_factory=AioDictCursor)).cursor()
         await cr.execute("SELECT 48 as value")
         self.assertEqual(cr.fetchone()['value'], 48)
 
