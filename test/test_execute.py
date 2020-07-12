@@ -5,7 +5,7 @@ try:
 except ImportError:
     from .async_case import IsolatedAsyncioTestCase
 
-from psycopg2 import OperationalError, ProgrammingError
+from psycopg2 import OperationalError, ProgrammingError, InterfaceError
 from psycopg2.extensions import (
     TRANSACTION_STATUS_IDLE, TRANSACTION_STATUS_INTRANS,
     ISOLATION_LEVEL_READ_UNCOMMITTED, ISOLATION_LEVEL_READ_COMMITTED,
@@ -13,27 +13,12 @@ from psycopg2.extensions import (
     ISOLATION_LEVEL_DEFAULT)
 from psycopg2.extras import DictCursor
 
-from psycaio import connect as psycaio_connect, AioCursorMixin
-from psycaio.conn_proactor_connect import connect as proactor_connect
+from psycaio import connect, AioCursorMixin
 
 from .loops import loop_classes
 
-connect = psycaio_connect
-
 
 class ExecTestCase(IsolatedAsyncioTestCase):
-
-    def setUp(self):
-        cls = type(self)
-        if cls.__name__.startswith("ForcedProactor"):
-            global connect
-            connect = proactor_connect
-        super().setUp()
-
-    def tearDown(self):
-        global connect
-        connect = psycaio_connect
-        super().tearDown()
 
     async def asyncSetUp(self):
         self.cn = await connect(dbname="postgres")
@@ -49,6 +34,10 @@ class ExecTestCase(IsolatedAsyncioTestCase):
     async def test_autocommit(self):
         self.assertFalse(self.cn.autocommit)
         await self.cr.execute("SELECT 42")
+        with self.assertRaises(ProgrammingError):
+            self.cn.autocommit = True
+
+        await self.cr.execute("SELECT 42")
         self.assertEqual(
             self.cn.info.transaction_status, TRANSACTION_STATUS_INTRANS)
         await self.cn.commit()
@@ -56,6 +45,10 @@ class ExecTestCase(IsolatedAsyncioTestCase):
         await self.cr.execute("SELECT 42")
         self.assertEqual(
             self.cn.info.transaction_status, TRANSACTION_STATUS_IDLE)
+
+        self.cn.close()
+        with self.assertRaises(InterfaceError):
+            self.cn.autocommit = True
 
     async def _test_iso_level_numeric(self, iso_level, iso_text):
         self.cn.isolation_level = iso_level
@@ -70,6 +63,11 @@ class ExecTestCase(IsolatedAsyncioTestCase):
         await self.cn.rollback()
 
     async def test_isolation_level(self):
+        cn = await connect(dbname="postgres")
+        cn.close()
+        with self.assertRaises(InterfaceError):
+            cn.isolation_level = ISOLATION_LEVEL_REPEATABLE_READ
+
         await self.cr.execute("SHOW TRANSACTION ISOLATION LEVEL")
         default_level = self.cr.fetchone()[0]
         await self.cn.rollback()
@@ -92,6 +90,11 @@ class ExecTestCase(IsolatedAsyncioTestCase):
         await self.cr.execute("SHOW TRANSACTION ISOLATION LEVEL")
         self.assertEqual(self.cr.fetchone()[0], default_level)
 
+        await self.cn.rollback()
+        self.cn.isolation_level = "DEFAULT"
+        await self.cr.execute("SHOW TRANSACTION ISOLATION LEVEL")
+        self.assertEqual(self.cr.fetchone()[0], default_level)
+
         with self.assertRaises(ProgrammingError):
             self.cn.isolation_level = "DEFAULT"
 
@@ -104,6 +107,104 @@ class ExecTestCase(IsolatedAsyncioTestCase):
 
         with self.assertRaises(TypeError):
             self.cn.isolation_level = object()
+
+    async def test_readonly(self):
+        cn = await connect(dbname="postgres")
+        cn.close()
+        with self.assertRaises(InterfaceError):
+            cn.readonly = True
+
+        await self.cr.execute("SELECT 8")
+        with self.assertRaises(ProgrammingError):
+            self.cn.readonly = True
+
+        await self.cn.rollback()
+        await self.cr.execute("SHOW transaction_read_only")
+        default_ro = self.cr.fetchone()[0]
+
+        await self.cn.rollback()
+        self.cn.readonly = True
+        await self.cr.execute("SHOW transaction_read_only")
+        self.assertEqual(self.cr.fetchone()[0], 'on')
+
+        await self.cn.rollback()
+        self.cn.readonly = False
+        await self.cr.execute("SHOW transaction_read_only")
+        self.assertEqual(self.cr.fetchone()[0], 'off')
+
+        await self.cn.rollback()
+        self.cn.readonly = None
+        await self.cr.execute("SHOW transaction_read_only")
+        self.assertEqual(self.cr.fetchone()[0], default_ro)
+
+        await self.cn.rollback()
+        self.cn.readonly = "default"
+        await self.cr.execute("SHOW transaction_read_only")
+        self.assertEqual(self.cr.fetchone()[0], default_ro)
+
+        await self.cn.rollback()
+        self.cn.readonly = b"default"
+        await self.cr.execute("SHOW transaction_read_only")
+        self.assertEqual(self.cr.fetchone()[0], default_ro)
+
+        await self.cn.rollback()
+        with self.assertRaises(ValueError):
+            self.cn.readonly = "nonsense"
+
+    async def test_deferrable(self):
+        cn = await connect(dbname="postgres")
+        cn.close()
+        with self.assertRaises(InterfaceError):
+            cn.deferrable = True
+
+        await self.cr.execute("SELECT 8")
+        with self.assertRaises(ProgrammingError):
+            self.cn.deferrable = True
+
+        await self.cn.rollback()
+        await self.cr.execute("SHOW transaction_deferrable")
+        default_ro = self.cr.fetchone()[0]
+
+        await self.cn.rollback()
+        self.cn.deferrable = True
+        await self.cr.execute("SHOW transaction_deferrable")
+        self.assertEqual(self.cr.fetchone()[0], 'on')
+
+        await self.cn.rollback()
+        self.cn.deferrable = False
+        await self.cr.execute("SHOW transaction_deferrable")
+        self.assertEqual(self.cr.fetchone()[0], 'off')
+
+        await self.cn.rollback()
+        self.cn.deferrable = None
+        await self.cr.execute("SHOW transaction_deferrable")
+        self.assertEqual(self.cr.fetchone()[0], default_ro)
+
+        await self.cn.rollback()
+        self.cn.deferrable = "default"
+        await self.cr.execute("SHOW transaction_deferrable")
+        self.assertEqual(self.cr.fetchone()[0], default_ro)
+
+        await self.cn.rollback()
+        self.cn.deferrable = b"default"
+        await self.cr.execute("SHOW transaction_deferrable")
+        self.assertEqual(self.cr.fetchone()[0], default_ro)
+
+        await self.cn.rollback()
+        with self.assertRaises(ValueError):
+            self.cn.deferrable = "nonsense"
+
+    async def test_all_trans_options(self):
+        await self.cn.rollback()
+        self.cn.isolation_level = ISOLATION_LEVEL_SERIALIZABLE
+        self.cn.readonly = True
+        self.cn.deferrable = True
+        await self.cr.execute("SHOW TRANSACTION ISOLATION LEVEL")
+        self.assertEqual(self.cr.fetchone()[0].upper(), "SERIALIZABLE")
+        await self.cr.execute("SHOW transaction_read_only")
+        self.assertEqual(self.cr.fetchone()[0], 'on')
+        await self.cr.execute("SHOW transaction_deferrable")
+        self.assertEqual(self.cr.fetchone()[0], 'on')
 
     async def test_long_result(self):
         # to create the same event (POLL_READ) to test the shortcut
@@ -143,6 +244,10 @@ class ExecTestCase(IsolatedAsyncioTestCase):
     async def test_named_cursor(self):
         with self.assertRaises(ProgrammingError):
             self.cn.cursor("hello")
+
+    async def test_callproc(self):
+        await self.cr.callproc("generate_series", (1, 1))
+        self.assertEqual(self.cr.fetchone()[0], 1)
 
 
 globals().update(**{cls.__name__: cls for cls in loop_classes(ExecTestCase)})

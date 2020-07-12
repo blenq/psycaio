@@ -1,25 +1,16 @@
 from asyncio import wait_for, CancelledError
 import os
 import socket
-try:
-    from asyncio import get_running_loop
-except ImportError:  # pragma: no cover
-    from asyncio import get_event_loop as get_running_loop
 
 from psycopg2 import OperationalError, connect as pg_connect
 from psycopg2.extensions import parse_dsn
 
-from .conn import AioConnection
-from .cursor import AioCursor
+from .conn import AioConnMixin
+from .utils import get_running_loop
 
 
 async def connect(
         dsn=None, connection_factory=None, cursor_factory=None, **kwargs):
-
-    if connection_factory is None:
-        connection_factory = AioConnection
-    if cursor_factory is None:
-        cursor_factory = AioCursor
 
     if dsn:
         conn_kwargs = parse_dsn(dsn)
@@ -27,8 +18,7 @@ async def connect(
         conn_kwargs = {}
 
     conn_kwargs.update(kwargs)
-    conn_kwargs.update({
-        'async': True, 'async_': True, 'client_encoding': 'UTF8'})
+    conn_kwargs.update({'async_': True, 'client_encoding': 'UTF8'})
 
     # Two issues with non-blocking libpq:
     # * libpq and therefore psycopg2 do not respect connect_timeout in non
@@ -131,7 +121,7 @@ async def connect(
         conn_kwargs.update(host=host, hostaddr=hostaddr, port=port)
         cn = pg_connect(connection_factory=connection_factory,
                         cursor_factory=cursor_factory, **conn_kwargs)
-        if not isinstance(cn, AioConnection):
+        if not isinstance(cn, AioConnMixin):
             raise OperationalError(
                 "connection_factory must return an instance of AioConnection")
         try:

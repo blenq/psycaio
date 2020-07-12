@@ -1,23 +1,36 @@
 from asyncio import Lock
-try:
-    from asyncio import get_running_loop
-except ImportError:  # pragma: no cover
-    from asyncio import get_event_loop as get_running_loop
 
 from psycopg2 import OperationalError, ProgrammingError
 from psycopg2.extensions import (
-    ISOLATION_LEVEL_DEFAULT, ISOLATION_LEVEL_READ_COMMITTED,
-    ISOLATION_LEVEL_REPEATABLE_READ, ISOLATION_LEVEL_SERIALIZABLE,
-    ISOLATION_LEVEL_READ_UNCOMMITTED,
-    TRANSACTION_STATUS_IDLE,
-    POLL_OK, POLL_READ, POLL_WRITE)
+    TRANSACTION_STATUS_IDLE, POLL_OK, POLL_READ, POLL_WRITE)
 
 from .cursor_selector import SelectorAioCursorMixin
+from .utils import get_running_loop
+
+_iso_levels = [
+    "DEFAULT", "READ COMMITTED", "REPEATABLE READ", "SERIALIZABLE",
+    "READ UNCOMMITTED",
+]
+
+
+def _parse_on_off(val):
+    if isinstance(val, bytes):
+        val = val.decode()
+
+    if isinstance(val, str):
+        if val.upper() == "DEFAULT":
+            val = None
+        else:
+            raise ValueError(
+                f"the only string accepted is 'default'; got {val}")
+    elif val is not None:
+        val = bool(val)
+    return val
 
 
 class SelectorAioConnMixin:
-    """ override to restore dbapi transaction behaviour and add asyncio
-    behaviour
+    """ override to restore psycopg2 transaction behavior and add asyncio
+    polling
 
     """
     _cursor_check_type = SelectorAioCursorMixin
@@ -29,9 +42,17 @@ class SelectorAioConnMixin:
 
         super().__init__(*args, **kwargs)
         self._autocommit = False
-        self._isolation_level = ISOLATION_LEVEL_DEFAULT
+        self._isolation_level = None
+        self._readonly = None
+        self._deferrable = None
         self._fd = self.fileno()
         self._execute_lock = Lock()
+
+    def _check_trans(self):
+        self._check_closed()
+        if self.info.transaction_status != TRANSACTION_STATUS_IDLE:
+            raise ProgrammingError(
+                "set_session cannot be used inside a transaction")
 
     @property
     def autocommit(self):
@@ -39,7 +60,26 @@ class SelectorAioConnMixin:
 
     @autocommit.setter
     def autocommit(self, value):
+        self._check_trans()
         self._autocommit = bool(value)
+
+    @property
+    def deferrable(self):
+        return self._deferrable
+
+    @deferrable.setter
+    def deferrable(self, val):
+        self._check_trans()
+        self._deferrable = _parse_on_off(val)
+
+    @property
+    def readonly(self):
+        return self._readonly
+
+    @readonly.setter
+    def readonly(self, val):
+        self._check_trans()
+        self._readonly = _parse_on_off(val)
 
     @property
     def isolation_level(self):
@@ -47,35 +87,29 @@ class SelectorAioConnMixin:
 
     @isolation_level.setter
     def isolation_level(self, level):
-        if self.info.transaction_status != TRANSACTION_STATUS_IDLE:
-            raise ProgrammingError(
-                "set_session cannot be used inside a transaction")
-        if level is None:
-            self._isolation_level = ISOLATION_LEVEL_DEFAULT
-            return
-
-        if isinstance(level, int):
-            if level not in range(1, 5):
-                raise ValueError("isolation_level must be between 1 and 4")
-            self._isolation_level = level
-            return
+        self._check_trans()
 
         if isinstance(level, bytes):
             level = level.decode()
-        if isinstance(level, str):
-            for level_text, level_value in [
-                    ("READ COMMITTED", ISOLATION_LEVEL_READ_COMMITTED),
-                    ("REPEATABLE READ", ISOLATION_LEVEL_REPEATABLE_READ),
-                    ("SERIALIZABLE", ISOLATION_LEVEL_SERIALIZABLE),
-                    ("READ UNCOMMITTED", ISOLATION_LEVEL_READ_UNCOMMITTED),
-                    ("DEFAULT", ISOLATION_LEVEL_DEFAULT),
-                    ]:
-                if level.upper() == level_text:
-                    self._isolation_level = level_value
-                    return
 
-            raise ValueError(f"bad value for isolation_level: '{level}'")
-        raise TypeError("Expected bytes or unicode string, got object instead")
+        if isinstance(level, str):
+            try:
+                level = _iso_levels.index(level.upper())
+            except ValueError:
+                raise ValueError(f"bad value for isolation_level: '{level}'")
+
+            if level == 0:
+                level = None
+
+        if level is None:
+            self._isolation_level = None
+        elif isinstance(level, int):
+            if level not in range(1, 5):
+                raise ValueError("isolation_level must be between 1 and 4")
+            self._isolation_level = level
+        else:
+            raise TypeError(
+                "Expected bytes or unicode string, got object instead")
 
     def _transaction_command(self):
         if (self.autocommit or
@@ -84,21 +118,20 @@ class SelectorAioConnMixin:
         cmd = ["BEGIN TRANSACTION"]
         if self.isolation_level:
             cmd.append("ISOLATION LEVEL")
-            cmd.append({
-                ISOLATION_LEVEL_READ_COMMITTED: "READ COMMITTED",
-                ISOLATION_LEVEL_READ_UNCOMMITTED: "READ UNCOMMITTED",
-                ISOLATION_LEVEL_REPEATABLE_READ: "REPEATABLE READ",
-                ISOLATION_LEVEL_SERIALIZABLE: "SERIALIZABLE",
-            }[self.isolation_level])
+            cmd.append(_iso_levels[self._isolation_level])
+        if self.readonly is not None:
+            cmd.append("READ ONLY" if self.readonly else "READ WRITE")
+        if self.deferrable is not None:
+            cmd.append("DEFERRABLE" if self.deferrable else "NOT DEFERRABLE")
         return ' '.join(cmd)
 
     async def commit(self):
-        async with self._execute_lock:
-            await self.cursor()._execute("COMMIT")
+        if self.info.transaction_status != TRANSACTION_STATUS_IDLE:
+            await self.cursor().execute("COMMIT")
 
     async def rollback(self):
-        async with self._execute_lock:
-            await self.cursor()._execute("ROLLBACK")
+        if self.info.transaction_status != TRANSACTION_STATUS_IDLE:
+            await self.cursor().execute("ROLLBACK")
 
     def _start_connect_poll(self):
         """ Starts polling after connect """

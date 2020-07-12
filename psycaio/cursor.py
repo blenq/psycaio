@@ -1,9 +1,4 @@
 from asyncio import shield, CancelledError
-from asyncio.proactor_events import BaseProactorEventLoop
-try:
-    from asyncio import get_running_loop
-except ImportError:  # pragma: no cover
-    from asyncio import get_event_loop as get_running_loop
 import threading
 
 from psycopg2.extensions import cursor
@@ -35,17 +30,6 @@ class AioCursorMixin:
         else:
             _types = _selector_cursor_types
 
-#         loop = get_running_loop()
-#
-#         # Assumption: All loop implementations besides the ProactorEventLoop
-#         # support add_reader and add_writer.
-#         # This is true for the existing loops in the Python stdlib and the
-#         # uvloop, but it might not be true for a yet unknown loop.
-#         if isinstance(loop, BaseProactorEventLoop):
-#             _types = _proactor_cursor_types
-#         else:
-#             _types = _selector_cursor_types
-
         return super().__new__(_types[cls], *args, **kwargs)
 
     async def _wait_for_execute(self, fut):
@@ -71,6 +55,12 @@ class AioCursorMixin:
             # Make sure future is done. This is a no-op when fut is
             # already done.
             fut.cancel()
+
+    async def execute(self, *args, **kwargs):
+        return await self._exec_async(super().execute, *args, **kwargs)
+
+    async def callproc(self, *args, **kwargs):
+        return await self._exec_async(super().callproc, *args, **kwargs)
 
 
 class AioCursor(AioCursorMixin, cursor):

@@ -7,29 +7,14 @@ try:
 except ImportError:
     from .async_case import IsolatedAsyncioTestCase
 
-from psycopg2 import OperationalError
+from psycopg2 import OperationalError, ProgrammingError, InterfaceError
 
-from psycaio import connect as psycaio_connect, AioConnection
-from psycaio.conn_proactor_connect import connect as proactor_connect
+from psycaio import connect, AioConnection
 
 from test.loops import loop_classes, uses_proactor
 
-connect = psycaio_connect
-
 
 class ConnTestCase(IsolatedAsyncioTestCase):
-
-    def setUp(self):
-        cls = type(self)
-        if cls.__name__.startswith("ForcedProactor"):
-            global connect
-            connect = proactor_connect
-        super().setUp()
-
-    def tearDown(self):
-        global connect
-        connect = psycaio_connect
-        super().tearDown()
 
     async def test_connect(self):
         cn = await connect(dbname='postgres')
@@ -100,19 +85,27 @@ class ConnTestCase(IsolatedAsyncioTestCase):
             await connect(dbname='postgres', connection_factory=BadConn)
 
     async def test_cancellation(self):
-        if uses_proactor(connect):
+        if uses_proactor():
             self.skipTest("Proactor loop")
         with self.assertRaises(TimeoutError):
             await wait_for(
                 connect(dbname='postgres', host='www.example.com'), 0.1)
 
     async def test_unexpected_poll(self):
-        if uses_proactor(connect):
+        if uses_proactor():
             self.skipTest("Proactor loop")
         cn = await connect(dbname="postgres")
         cn._try_poll = lambda: 5
         with self.assertRaises(OperationalError):
             await cn.cursor().execute("SELECT 42")
+
+    async def test_reset(self):
+        cn = await connect(dbname="postgres")
+        with self.assertRaises(ProgrammingError):
+            cn.reset()
+        cn.close()
+        with self.assertRaises(InterfaceError):
+            cn.reset()
 
 
 globals().update(**{cls.__name__: cls for cls in loop_classes(ConnTestCase)})

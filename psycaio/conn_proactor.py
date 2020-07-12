@@ -1,11 +1,7 @@
-try:
-    from asyncio import get_running_loop
-except ImportError:  # pragma: no cover
-    from asyncio import get_event_loop as get_running_loop
-
 from psycopg2 import ProgrammingError
 
 from .cursor_proactor import ProactorAioCursorMixin
+from .utils import get_running_loop
 
 
 class ProactorAioConnMixin:
@@ -26,3 +22,7 @@ class ProactorAioConnMixin:
             raise ProgrammingError(
                 "asynchronous connections cannot produce named cursors")
         return super().cursor(name, *args, **kwargs)
+
+    def reset(self):
+        self._check_closed()
+        raise ProgrammingError("reset cannot be used in asynchronous mode")

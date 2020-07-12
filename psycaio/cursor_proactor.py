@@ -1,13 +1,11 @@
-try:
-    from asyncio import get_running_loop
-except ImportError:  # pragma: no cover
-    from asyncio import get_event_loop as get_running_loop
 from functools import partial
+
+from .utils import get_running_loop
 
 
 class ProactorAioCursorMixin:
 
-    async def execute(self, *args, **kwargs):
-        func = partial(super().execute, *args, **kwargs)
+    async def _exec_async(self, func, *args, **kwargs):
+        func = partial(func, *args, **kwargs)
         fut = get_running_loop().run_in_executor(None, func)
-        await self._wait_for_execute(fut)
+        return await self._wait_for_execute(fut)

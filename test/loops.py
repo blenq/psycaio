@@ -32,7 +32,15 @@ if not policies:
     # operations to the default thread pool.
     # This is able to run fine on the selector loop as well, so we add this
     # policy to be able to test the proactor version on a non windows platform
-    policies.append(("ForcedProactor", asyncio.DefaultEventLoopPolicy))
+
+    class ForcedProactorPolicy(asyncio.DefaultEventLoopPolicy):
+
+        def new_event_loop(self):
+            loop = super().new_event_loop()
+            loop._proactor = "yes"
+            return loop
+
+    policies.append(("ForcedProactor", ForcedProactorPolicy))
 
 # try to add uvloop as well, if available
 try:
@@ -60,6 +68,5 @@ def loop_classes(cls):
         yield new_cls
 
 
-def uses_proactor(connect_func):
-    return (isinstance(get_running_loop(), BaseProactorEventLoop) or
-            connect_func is proactor_connect)
+def uses_proactor():
+    return hasattr(get_running_loop(), "_proactor")
