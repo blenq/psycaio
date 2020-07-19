@@ -11,7 +11,7 @@ from psycopg2 import OperationalError, ProgrammingError, InterfaceError
 
 from psycaio import connect, AioConnection
 
-from test.loops import loop_classes, uses_proactor
+from test.loops import loop_classes
 
 
 class ConnTestCase(IsolatedAsyncioTestCase):
@@ -85,17 +85,13 @@ class ConnTestCase(IsolatedAsyncioTestCase):
             await connect(dbname='postgres', connection_factory=BadConn)
 
     async def test_cancellation(self):
-        if uses_proactor():
-            self.skipTest("Proactor loop")
         with self.assertRaises(TimeoutError):
             await wait_for(
                 connect(dbname='postgres', host='www.example.com'), 0.1)
 
     async def test_unexpected_poll(self):
-        if uses_proactor():
-            self.skipTest("Proactor loop")
         cn = await connect(dbname="postgres")
-        cn._try_poll = lambda: 5
+        cn.poll = lambda: 5
         with self.assertRaises(OperationalError):
             await cn.cursor().execute("SELECT 42")
 

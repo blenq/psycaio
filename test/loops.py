@@ -3,14 +3,11 @@
 # For now that is the available loops in the stdlib and uvloop
 
 import asyncio
-from asyncio.proactor_events import BaseProactorEventLoop
 
 try:
     from asyncio import get_running_loop
 except ImportError:
     from asyncio import get_event_loop as get_running_loop
-
-from psycaio.conn_proactor_connect import connect as proactor_connect
 
 policies = []
 
@@ -66,7 +63,3 @@ def loop_classes(cls):
             policy_name + cls.__name__, (ExplicitLoopMixin, cls), {})
         new_cls.loop_policy = policy
         yield new_cls
-
-
-def uses_proactor():
-    return hasattr(get_running_loop(), "_proactor")

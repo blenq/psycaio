@@ -50,6 +50,8 @@ async def connect(
         if timeout <= 0:
             timeout = None
 
+    loop = get_running_loop()
+
     if not conn_kwargs.get("service"):
 
         def parse_multi(param_name):
@@ -94,7 +96,6 @@ async def connect(
 
         # Now we got three lists of equal length. Loop through them and add
         # a tuple for each host entry that we find
-        loop = get_running_loop()
         host_entries = []
         for host, hostaddr, port in zip(hosts, hostaddrs, ports):
             if hostaddr or not host or host.startswith('/'):
@@ -125,12 +126,15 @@ async def connect(
             raise OperationalError(
                 "connection_factory must return an instance of AioConnection")
         try:
-            await wait_for(cn._start_connect_poll(), timeout)
+            await wait_for(
+                cn._start_connect_poll(hasattr(loop, "_proactor")), timeout)
             return cn
         except CancelledError:
+            cn.close()
             # we got cancelled, do not try next entry
             raise
         except Exception as ex:
+            cn.close()
             exceptions.append(ex)
     if len(exceptions) == 1:
         raise exceptions[0]
