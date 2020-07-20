@@ -5,12 +5,18 @@ import socket
 from psycopg2 import OperationalError, connect as pg_connect
 from psycopg2.extensions import parse_dsn
 
-from .conn import AioConnMixin
+from .conn import AioConnMixin, AioConnection
+from .cursor import AioCursor
 from .utils import get_running_loop
 
 
 async def connect(
         dsn=None, connection_factory=None, cursor_factory=None, **kwargs):
+
+    if connection_factory is None:
+        connection_factory = AioConnection
+    if cursor_factory is None:
+        cursor_factory = AioCursor
 
     if dsn:
         conn_kwargs = parse_dsn(dsn)
@@ -126,8 +132,7 @@ async def connect(
             raise OperationalError(
                 "connection_factory must return an instance of AioConnection")
         try:
-            await wait_for(
-                cn._start_connect_poll(hasattr(loop, "_proactor")), timeout)
+            await wait_for(cn._start_connect_poll(), timeout)
             return cn
         except CancelledError:
             cn.close()

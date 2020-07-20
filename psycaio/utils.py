@@ -10,6 +10,7 @@ MAX_FILENO = 60
 
 
 class SelectorThread(threading.Thread):
+    """ Thread with a running selector event loop """
 
     def __init__(self, condition):
         super().__init__(daemon=True)
@@ -20,6 +21,7 @@ class SelectorThread(threading.Thread):
         self.loop = asyncio.SelectorEventLoop()
         asyncio.set_event_loop(self.loop)
         with self.condition:
+            # notify pool we're ready
             self.condition.notify()
         self.loop.run_forever()
 
@@ -37,10 +39,13 @@ class SelectorPool():
             if thread.num < MAX_FILENO:
                 thread.num += 1
                 return thread
+
+        # no available thread, create one
         condition = threading.Condition()
         with condition:
             thread = SelectorThread(condition)
             thread.start()
+            # wait until loop is set up
             condition.wait()
         self.threads.append(thread)
         return thread

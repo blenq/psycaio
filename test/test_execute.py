@@ -1,11 +1,12 @@
 import asyncio
+import sys
 
 try:
     from unittest import IsolatedAsyncioTestCase
 except ImportError:
     from .async_case import IsolatedAsyncioTestCase
 
-from psycopg2 import OperationalError, ProgrammingError
+from psycopg2 import OperationalError, ProgrammingError, InterfaceError
 from psycopg2.extensions import TRANSACTION_STATUS_IDLE
 from psycopg2.extras import DictCursor
 
@@ -22,6 +23,15 @@ class ExecTestCase(IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.cn.close()
+
+    async def test_ref(self):
+        cn = await connect(dbname="postgres")
+        cr = cn.cursor()
+        await cr.execute("SELECT 42")
+        self.assertEqual(cr.fetchone()[0], 42)
+        cr.close()
+        del cr
+        self.assertEqual(sys.getrefcount(cn), 2)
 
     async def test_simple(self):
         await self.cr.execute("SELECT 42")
@@ -68,7 +78,9 @@ class ExecTestCase(IsolatedAsyncioTestCase):
         await self.cr.execute("ROLLBACK")
         self.assertEqual(
             self.cn.info.transaction_status, TRANSACTION_STATUS_IDLE)
+
         task = asyncio.ensure_future(self.cr.execute("SELECT pg_sleep(5)"))
+
         await asyncio.sleep(0.1)
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
@@ -76,14 +88,15 @@ class ExecTestCase(IsolatedAsyncioTestCase):
         # asyncio Task is cancelled, but the underlying future is shielded to
         # try to cancel the statement server side. At this moment that hasn't
         # happened yet, so we need to wait a bit.
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.1)
         # check if statement is cancelled server side as well
         self.assertEqual(
             self.cn.info.transaction_status, TRANSACTION_STATUS_IDLE)
 
         with self.assertRaises(asyncio.TimeoutError):
             await asyncio.wait_for(self.cr.execute("SELECT pg_sleep(5)"), 0.1)
-        await asyncio.sleep(0.2)
+
+        await asyncio.sleep(0.1)
         self.assertEqual(
             self.cn.info.transaction_status, TRANSACTION_STATUS_IDLE)
 
@@ -120,12 +133,35 @@ class ExecTestCase(IsolatedAsyncioTestCase):
         notify = await self.cn.notifies.pop()
         self.assertEqual(notify.payload, 'hi')
 
-        task = asyncio.ensure_future(self.cn.notifies.pop())
         await self.cr.execute("LISTEN queue")
+        task = asyncio.ensure_future(self.cn.notifies.pop())
+        await asyncio.sleep(0.1)
         await self.cr.execute("NOTIFY queue, 'hello'")
         await task
         notify = task.result()
         self.assertEqual(notify.payload, 'hello')
+
+    async def test_notify_already_closed(self):
+        self.cn.close()
+        with self.assertRaises(InterfaceError):
+            await self.cn.notifies.pop()
+
+    async def test_notify_closed(self):
+        task = asyncio.ensure_future(self.cn.notifies.pop())
+        await asyncio.sleep(0)
+        self.cn.close()
+        with self.assertRaises(InterfaceError):
+            await task
+
+    async def test_executemany(self):
+        await self.cr.execute("BEGIN")
+        await self.cr.execute("CREATE TEMP TABLE test (val int)")
+        await self.cr.executemany(
+            "INSERT INTO test (val) VALUES (%s)", [(1,), (2,)])
+        await self.cr.execute("SELECT SUM(val) FROM test")
+        self.assertEqual(self.cr.fetchone()[0], 3)
+        await self.cr.execute("DROP TABLE test")
+        await self.cr.execute("ROLLBACK")
 
 
 globals().update(**{cls.__name__: cls for cls in loop_classes(ExecTestCase)})

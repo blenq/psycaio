@@ -1,6 +1,7 @@
 from asyncio import TimeoutError, wait_for
 import os
 import tempfile
+import sys
 
 try:
     from unittest import IsolatedAsyncioTestCase
@@ -11,7 +12,7 @@ from psycopg2 import OperationalError, ProgrammingError, InterfaceError
 
 from psycaio import connect, AioConnection
 
-from test.loops import loop_classes
+from .loops import loop_classes
 
 
 class ConnTestCase(IsolatedAsyncioTestCase):
@@ -19,6 +20,7 @@ class ConnTestCase(IsolatedAsyncioTestCase):
     async def test_connect(self):
         cn = await connect(dbname='postgres')
         self.assertIsInstance(cn, AioConnection)
+        self.assertEqual(sys.getrefcount(cn), 2)
 
     async def test_connect_dsn(self):
         cn = await connect('dbname=postgres')
@@ -90,10 +92,26 @@ class ConnTestCase(IsolatedAsyncioTestCase):
                 connect(dbname='postgres', host='www.example.com'), 0.1)
 
     async def test_unexpected_poll(self):
+        old_poll = AioConnection.poll
+        AioConnection.poll = lambda self: 5
+        with self.assertRaises(OperationalError):
+            await connect(dbname="postgres")
+        AioConnection.poll = old_poll
+
         cn = await connect(dbname="postgres")
         cn.poll = lambda: 5
         with self.assertRaises(OperationalError):
             await cn.cursor().execute("SELECT 42")
+
+    async def test_commit(self):
+        cn = await connect(dbname="postgres")
+        with self.assertRaises(ProgrammingError):
+            cn.commit()
+
+    async def test_rollback(self):
+        cn = await connect(dbname="postgres")
+        with self.assertRaises(ProgrammingError):
+            cn.rollback()
 
     async def test_reset(self):
         cn = await connect(dbname="postgres")
@@ -102,6 +120,11 @@ class ConnTestCase(IsolatedAsyncioTestCase):
         cn.close()
         with self.assertRaises(InterfaceError):
             cn.reset()
+
+    async def test_encoding(self):
+        cn = await connect(dbname="postgres")
+        with self.assertRaises(ProgrammingError):
+            cn.set_client_encoding('LATIN1')
 
 
 globals().update(**{cls.__name__: cls for cls in loop_classes(ConnTestCase)})

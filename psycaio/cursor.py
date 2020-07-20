@@ -15,6 +15,10 @@ class AioCursorMixin:
     async def execute(self, *args, **kwargs):
         return await self._call_async(super().execute, *args, **kwargs)
 
+    async def executemany(self, query, vars_list):
+        for variables in vars_list:
+            await self.execute(query, variables)
+
 
 class AioCursor(AioCursorMixin, cursor):
     pass
