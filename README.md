@@ -15,11 +15,9 @@ async def test_conn():
     cr = cn.cursor()
     await cr.execute("SELECT 42")
     print(cr.fetchone()[0])
-    await cn.commit()
     cr = cn.cursor()
     await cr.execute("SELECT 42")
     print(cr.fetchone()[0])
-    await cn.rollback()
 
 
 if __name__ == '__main__':
