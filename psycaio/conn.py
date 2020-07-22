@@ -41,7 +41,7 @@ class NotifyQueue:
         # between those threads (and loops).
         self._loop_call_soon_threadsafe(self._queue.put_nowait, item)
 
-    async def _pop(self, cn):
+    async def _pop(self):
         queue = self._queue
         notify = await queue.get()
         queue.task_done()
@@ -62,13 +62,13 @@ class NotifyQueue:
             with cn._selector_thread() as tm:
                 tm.call(cn._start_reading, cn._poll)
                 try:
-                    return await self._pop(cn)
+                    return await self._pop()
                 finally:
                     tm.call(cn._stop_reading)
         else:
             cn._start_reading(cn._poll)
             try:
-                return await self._pop(cn)
+                return await self._pop()
             finally:
                 cn._stop_reading()
 
