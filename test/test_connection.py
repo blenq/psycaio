@@ -9,8 +9,9 @@ except ImportError:
     from .async_case import IsolatedAsyncioTestCase
 
 from psycopg2 import OperationalError, ProgrammingError, InterfaceError
+from psycopg2.extensions import connection
 
-from psycaio import connect, AioConnection
+from psycaio import connect, AioConnection, AioConnMixin
 
 from .loops import loop_classes
 
@@ -82,6 +83,14 @@ class ConnTestCase(IsolatedAsyncioTestCase):
 
             def __init__(self, *args, **kwargs):
                 pass
+
+        with self.assertRaises(OperationalError):
+            await connect(dbname='postgres', connection_factory=BadConn)
+
+    async def test_reverse_conn(self):
+
+        class BadConn(connection, AioConnMixin):
+            pass
 
         with self.assertRaises(OperationalError):
             await connect(dbname='postgres', connection_factory=BadConn)

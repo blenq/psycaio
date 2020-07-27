@@ -6,8 +6,8 @@ try:
 except ImportError:
     from .async_case import IsolatedAsyncioTestCase
 
-from psycopg2 import OperationalError, ProgrammingError, InterfaceError
-from psycopg2.extensions import TRANSACTION_STATUS_IDLE
+from psycopg2 import ProgrammingError, InterfaceError
+from psycopg2.extensions import TRANSACTION_STATUS_IDLE, cursor
 from psycopg2.extras import DictCursor
 
 from psycaio import connect, AioCursorMixin
@@ -102,8 +102,24 @@ class ExecTestCase(IsolatedAsyncioTestCase):
 
     async def test_bad_cursor(self):
 
-        with self.assertRaises(OperationalError):
+        class BadCursor:
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+        with self.assertRaises(TypeError):
+            self.cn.cursor(cursor_factory=BadCursor)
+
+        with self.assertRaises(TypeError):
             self.cn.cursor(cursor_factory=DictCursor)
+
+    async def test_reverse_cursor(self):
+
+        class BadCursor(cursor, AioCursorMixin):
+            pass
+
+        with self.assertRaises(TypeError):
+            self.cn.cursor(cursor_factory=BadCursor)
 
     async def test_dict_cursor(self):
 
@@ -130,24 +146,33 @@ class ExecTestCase(IsolatedAsyncioTestCase):
     async def test_notify(self):
         await self.cr.execute("LISTEN queue")
         await self.cr.execute("NOTIFY queue, 'hi'")
-        notify = await self.cn.notifies.pop()
+        notify = await self.cn.get_notify()
         self.assertEqual(notify.payload, 'hi')
 
         await self.cr.execute("LISTEN queue")
-        task = asyncio.ensure_future(self.cn.notifies.pop())
+        task = asyncio.ensure_future(self.cn.get_notify())
         await asyncio.sleep(0.1)
         await self.cr.execute("NOTIFY queue, 'hello'")
         await task
         notify = task.result()
         self.assertEqual(notify.payload, 'hello')
 
+    async def test_notify_nowait(self):
+        await self.cr.execute("LISTEN queue")
+        await self.cr.execute("NOTIFY queue, 'hi'")
+        await asyncio.sleep(0.1)
+        notify = self.cn.get_notify_nowait()
+        self.assertEqual(notify.payload, 'hi')
+        with self.assertRaises(asyncio.QueueEmpty):
+            self.cn.get_notify_nowait()
+
     async def test_notify_already_closed(self):
         self.cn.close()
         with self.assertRaises(InterfaceError):
-            await self.cn.notifies.pop()
+            await self.cn.get_notify()
 
     async def test_notify_closed(self):
-        task = asyncio.ensure_future(self.cn.notifies.pop())
+        task = asyncio.ensure_future(self.cn.get_notify())
         await asyncio.sleep(0)
         self.cn.close()
         with self.assertRaises(InterfaceError):

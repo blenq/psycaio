@@ -1,20 +1,14 @@
 from asyncio import (
     Lock, Queue, wrap_future, run_coroutine_threadsafe, shield,
-    CancelledError)
+    CancelledError, QueueEmpty)
 from contextlib import contextmanager
-import weakref
 
 from psycopg2 import OperationalError, InterfaceError
 from psycopg2.extensions import (
-    POLL_OK, POLL_READ, POLL_WRITE, connection)
+    POLL_OK, POLL_READ, POLL_WRITE, connection, cursor)
 
 from .utils import get_running_loop, selector_pool
 from .cursor import AioCursorMixin
-
-_iso_levels = [
-    "DEFAULT", "READ COMMITTED", "REPEATABLE READ", "SERIALIZABLE",
-    "READ UNCOMMITTED",
-]
 
 
 class NotifyQueue:
@@ -22,8 +16,6 @@ class NotifyQueue:
 
     def __init__(self, connection):
 
-        # use weak reference to prevent circular reference
-        self._connref = weakref.ref(connection)
         self._queue = Queue()
 
         # psycopg2 will use the append method to add a notify object
@@ -47,32 +39,13 @@ class NotifyQueue:
         queue.task_done()
         return notify
 
-    async def pop(self):
+    def _pop_nowait(self):
         queue = self._queue
-        if not queue.empty():
-            notify = queue.get_nowait()
-            queue.task_done()
-            return notify
+        notify = queue.get_nowait()
+        queue.task_done()
+        return notify
 
-        # nothing in the Queue. Start reading until we got one
-        cn = self._connref()
-        if cn is None or cn.closed:
-            raise InterfaceError("connection already closed")
-        if cn._thread_manager is not None:
-            with cn._selector_thread() as tm:
-                tm.call(cn._start_reading, cn._poll)
-                try:
-                    return await self._pop()
-                finally:
-                    tm.call(cn._stop_reading)
-        else:
-            cn._start_reading(cn._poll)
-            try:
-                return await self._pop()
-            finally:
-                cn._stop_reading()
-
-    def _close(self):
+    def clear(self):
         getters = self._queue._getters
         while getters:
             getter = getters.popleft()
@@ -141,7 +114,14 @@ class ThreadManager:
 
 
 class AioConnMixin:
-    """ Mixin to add asyncio polling """
+    """ Mixin class to add asyncio behavior to the psycopg2
+    :py:class:`connection` class.
+
+    This class should be not be instantiated directly. It should be used as a
+    base class when implementing a custom connection.
+
+    """
+    __module__ = 'psycaio'
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -157,15 +137,47 @@ class AioConnMixin:
         self.notifies = NotifyQueue(self)
         self._execute_lock = Lock()
 
-    def cursor(self, *args, **kwargs):
-        """ Override to add type check """
+    def cursor(
+            self, name=None, cursor_factory=None, scrollable=None,
+            withhold=False):
+        """ Create and return a new cursor to perform database operations.
 
-        # psycopg2 already checks if it is a valid psyco cursor. This check is
-        # only for the psycaio mixin
-        cr = super().cursor(*args, **kwargs)
-        if not isinstance(cr, AioCursorMixin):
-            raise OperationalError(
-                "cursor_factory must return an instance of AioCursorMixin")
+        The only supported argument is *cursor_factory*, because named cursors
+        are not available in asynchronous mode.
+
+        If set, the *cursor_factory* is used to instantiate the cursor. It
+        must return an instance of both an
+        :class:`AioCursorMixin <psycaio.AioCursorMixin>` and a psycopg2
+        :py:class:`cursor <psycopg2.extensions.cursor>`. The default is the
+        :class:`AioCursor <psycaio.AioCursor>` class which just inherits from
+        both. The :class:`AioCursorMixin <psycaio.AioCursorMixin>` type must be
+        located before the psycopg2
+        :py:class:`cursor <psycopg2.extensions.cursor>` type in the class
+        hierarchy when performing a method lookup.
+
+        """
+        cr = super().cursor(
+            name=name, cursor_factory=cursor_factory, scrollable=scrollable,
+            withhold=withhold)
+
+        # psycopg2 already checked if it is a valid psycopg2 cursor. Now check
+        # for the psycaio mixin and the base class order
+        mro = type(cr).__mro__
+        try:
+            mixin_pos = mro.index(AioCursorMixin)
+        except ValueError:
+            # cursor is not a AioCursorMixin
+            raise TypeError(
+                "cursor factory must return a subclass of "
+                "psycaio.AioCursorMixin")
+
+        if mro.index(cursor) < mixin_pos:
+            # To be able to override behavior, AioCursorMixin should be before
+            # the real cursor, in the class hierarchy
+            raise TypeError(
+                "psycaio.AioCursorMixin must be present before "
+                "psycopg2.extensions.cursor in method resolution order. Maybe "
+                "base classes should be switched.")
         return cr
 
     def _start_reading(self, callback):
@@ -182,7 +194,7 @@ class AioConnMixin:
             self._loop.add_reader(self._fd, callback)
         self._num_readers += 1
 
-    def _stop_reading(self, fut=None):
+    def _stop_reading(self):
         """ Removes a reader from the list """
         if self._num_readers == 0:
             # can happen if a connection is closed by calling close()
@@ -276,7 +288,7 @@ class AioConnMixin:
             if not self._fut.done():
                 self._fut.set_exception(ex)
             if self.closed:
-                self.notifies._close()
+                self.notifies.clear()
             return
 
         if state == POLL_WRITE:
@@ -339,7 +351,72 @@ class AioConnMixin:
             await self.__start_poll()
 
     async def cancel(self):
+        """Cancel the current database operation.
+
+        This is the coroutine version of the psycopg2
+        :py:meth:`connection.cancel` method.
+
+        """
+        # original method is always blocking, so resort to threadpool
         await get_running_loop().run_in_executor(None, super().cancel)
+
+    def get_notify_nowait(self):
+        """ Remove and return a psycopg2
+        :py:class:`Notify <psycopg2.extensions.Notify>` object from the Notify
+        queue if one is immediately available, else raise
+        :py:class:`asyncio.QueueEmpty`.
+
+        """
+        return self.notifies._pop_nowait()
+
+    async def get_notify(self):
+        """ Remove and return a psycopg2
+        :py:class:`Notify <psycopg2.extensions.Notify>` object from the Notify
+        queue. If the queue is empty, wait until an item is available.
+
+        The :py:attr:`connection.notifies` attribute is replaced by the
+        :py:class:`psycaio.AioConnMixin` with a custom version that plays
+        nicely with asyncio. Do not set it to anything else or this method will
+        probably break.
+
+        Example:
+
+        .. code-block:: python
+
+            async def test_notify(cn1, cn2):
+                cr1 = cn1.cursor()
+                await cr1.execute("LISTEN queue")
+
+                cr2 = cn2.cursor()
+                await cr2.execute("NOTIFY queue, 'hi'")
+
+                notify = await cn1.get_notify()
+                print(notify.payload)
+
+        For more information see the PostgreSQL docs on
+        `LISTEN <https://www.postgresql.org/docs/current/sql-listen.html>`_.
+        """
+        try:
+            return self.get_notify_nowait()
+        except QueueEmpty:
+            pass
+
+        # nothing in the Queue. Start reading until we got one
+        if self.closed:
+            raise InterfaceError("connection already closed")
+        if self._thread_manager is not None:
+            with self._selector_thread() as tm:
+                tm.call(self._start_reading, self._poll)
+                try:
+                    return await self.notifies._pop()
+                finally:
+                    tm.call(self._stop_reading)
+        else:
+            self._start_reading(self._poll)
+            try:
+                return await self.notifies._pop()
+            finally:
+                self._stop_reading()
 
     def _close(self):
         self._reset_connect()
@@ -347,13 +424,31 @@ class AioConnMixin:
         self._fd = None
 
     def close(self):
+        """ Close the connection.
+
+        Coroutines that are still waiting for a Notify message with
+        :py:meth:`get_notify <psycaio.AioConnMixin.get_notify>` will be
+        interrupted by a psycopg2
+        :py:exc:`InterfaceError <psycopg2.InterfaceError>`.
+
+        """
         if self._thread_manager is not None:
             with self._selector_thread() as tm:
                 tm.call(self._close)
         else:
             self._close()
-        self.notifies._close()
+        self.notifies.clear()
 
 
 class AioConnection(AioConnMixin, connection):
-    pass
+    """ The default connection class used by psycaio.
+
+    It just inherits from both :class:`AioConnMixin <psycaio.AioConnMixin>` for
+    the asyncio behavior and the standard psycopg2
+    :py:class:`connection <psycopg2.extensions.connection>`, and contains no
+    additional implementation.
+
+    This class should not be instantiated directly. Use the
+    :func:`connect <psycaio.connect>` function instead.
+
+    """

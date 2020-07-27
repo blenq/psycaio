@@ -25,9 +25,10 @@ except ImportError:
 if not policies:
     # so, not on Windows, use the default (selector) loop
     policies.append(("DefaultLoop", asyncio.DefaultEventLoopPolicy))
-    # The proactor version of psycaio is just delegating all blocking
-    # operations to the default thread pool.
-    # This is able to run fine on the selector loop as well, so we add this
+    # The proactor version of psycaio is using a parallel selector loop in a
+    # separate thread for the IO operations. Detection is based on having a
+    # "_proactor" attribute.
+    # This mechanism can be used from a selector loop as well, so we add this
     # policy to be able to test the proactor version on a non windows platform
 
     class ForcedProactorPolicy(asyncio.DefaultEventLoopPolicy):
