@@ -5,7 +5,8 @@ from contextlib import contextmanager
 
 from psycopg2 import OperationalError, InterfaceError
 from psycopg2.extensions import (
-    POLL_OK, POLL_READ, POLL_WRITE, connection, cursor)
+    POLL_OK, POLL_READ, POLL_WRITE, connection as PGConnection,
+    cursor as PGCursor)
 
 from .utils import get_running_loop, selector_pool
 from .cursor import AioCursorMixin
@@ -115,7 +116,7 @@ class ThreadManager:
 
 class AioConnMixin:
     """ Mixin class to add asyncio behavior to the psycopg2
-    :py:class:`connection` class.
+    :py:class:`psycopg2:connection` class.
 
     This class should be not be instantiated directly. It should be used as a
     base class when implementing a custom connection.
@@ -148,11 +149,11 @@ class AioConnMixin:
         If set, the *cursor_factory* is used to instantiate the cursor. It
         must return an instance of both an
         :class:`AioCursorMixin <psycaio.AioCursorMixin>` and a psycopg2
-        :py:class:`cursor <psycopg2.extensions.cursor>`. The default is the
+        :py:class:`psycopg2:cursor`. The default is the
         :class:`AioCursor <psycaio.AioCursor>` class which just inherits from
         both. The :class:`AioCursorMixin <psycaio.AioCursorMixin>` type must be
         located before the psycopg2
-        :py:class:`cursor <psycopg2.extensions.cursor>` type in the class
+        :py:class:`psycopg2:cursor` type in the class
         hierarchy when performing a method lookup.
 
         """
@@ -171,7 +172,7 @@ class AioConnMixin:
                 "cursor factory must return a subclass of "
                 "psycaio.AioCursorMixin")
 
-        if mro.index(cursor) < mixin_pos:
+        if mro.index(PGCursor) < mixin_pos:
             # To be able to override behavior, AioCursorMixin should be before
             # the real cursor, in the class hierarchy
             raise TypeError(
@@ -354,7 +355,7 @@ class AioConnMixin:
         """Cancel the current database operation.
 
         This is the coroutine version of the psycopg2
-        :py:meth:`connection.cancel` method.
+        :py:meth:`psycopg2:connection.cancel` method.
 
         """
         # original method is always blocking, so resort to threadpool
@@ -374,8 +375,8 @@ class AioConnMixin:
         :py:class:`Notify <psycopg2.extensions.Notify>` object from the Notify
         queue. If the queue is empty, wait until an item is available.
 
-        The :py:attr:`connection.notifies` attribute is replaced by the
-        :py:class:`psycaio.AioConnMixin` with a custom version that plays
+        The :py:attr:`psycopg2:connection.notifies` attribute is replaced by
+        the :py:class:`psycaio.AioConnMixin` with a custom version that plays
         nicely with asyncio. Do not set it to anything else or this method will
         probably break.
 
@@ -440,13 +441,13 @@ class AioConnMixin:
         self.notifies.clear()
 
 
-class AioConnection(AioConnMixin, connection):
+class AioConnection(AioConnMixin, PGConnection):
     """ The default connection class used by psycaio.
 
     It just inherits from both :class:`AioConnMixin <psycaio.AioConnMixin>` for
     the asyncio behavior and the standard psycopg2
-    :py:class:`connection <psycopg2.extensions.connection>`, and contains no
-    additional implementation.
+    :py:class:`psycopg2:connection`, and
+    contains no additional implementation.
 
     This class should not be instantiated directly. Use the
     :func:`connect <psycaio.connect>` function instead.

@@ -5,22 +5,14 @@ Psycaio Module
 
 .. autofunction:: connect
 
-|
-
 .. autoclass:: AioConnMixin
    :members: cursor, get_notify, get_notify_nowait, close, cancel
-   
-|
 
 .. autoclass:: AioConnection
    :show-inheritance:
 
-|
-
 .. autoclass:: AioCursorMixin
    :members: execute, callproc, executemany
-
-|
 
 .. autoclass:: AioCursor
    :show-inheritance:

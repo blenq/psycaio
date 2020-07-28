@@ -3,7 +3,7 @@ import os
 import socket
 
 from psycopg2 import OperationalError, connect as pg_connect
-from psycopg2.extensions import parse_dsn, connection
+from psycopg2.extensions import parse_dsn, connection as PGConnection
 
 from .conn import AioConnMixin, AioConnection
 from .cursor import AioCursor
@@ -12,8 +12,8 @@ from .utils import get_running_loop
 
 async def connect(
         dsn=None, connection_factory=None, cursor_factory=None, **kwargs):
-    """Open a connection to the database server and return a `connection`
-    object.
+    """Open a connection to the database server and return a
+    :class:`connection <psycaio.AioConnection>` object.
 
     The parameters are the same as for the :py:func:`psycopg2.connect` function
     with a few exceptions:
@@ -23,22 +23,22 @@ async def connect(
 
     * If set, the *connection_factory* must return an instance of both an
       :class:`AioConnMixin <psycaio.AioConnMixin>` and a
-      psycopg2 :py:class:`connection <psycopg2.extensions.connection>`.
+      psycopg2 :py:class:`psycopg2:connection`.
       The default is the :class:`AioConnection <psycaio.AioConnection>`
       class which just inherits from both. The
       :class:`AioConnMixin <psycaio.AioConnMixin>` type must be located
       before the psycopg2
-      :py:class:`connection <psycopg2.extensions.connection>` type in the class
-      hierarchy when performing a method lookup.
+      :py:class:`psycopg2:connection` type in the class hierarchy when
+      performing a method lookup.
 
     * If set, the *cursor_factory* must return an instance of both an
       :class:`AioCursorMixin <psycaio.AioCursorMixin>` and a psycopg2
-      :py:class:`cursor <psycopg2.extensions.cursor>`.
+      :py:class:`psycopg2:cursor`.
       The default is the :class:`AioCursor <psycaio.AioCursor>`
       class which just inherits from both. The
       :class:`AioConnMixin <psycaio.AioCursorMixin>` type must be
       located before the psycopg2
-      :py:class:`cursor <psycopg2.extensions.cursor>` type in the class
+      :py:class:`psycopg2:cursor` type in the class
       hierarchy when performing a method lookup.
 
       For example, to create an asynchronous version of the psycopg2
@@ -193,11 +193,11 @@ async def connect(
         except ValueError:
             raise OperationalError(
                 "connection_factory must return an instance of AioConnMixin")
-        if mro.index(connection) < mixin_pos:
+        if mro.index(PGConnection) < mixin_pos:
             raise OperationalError(
-                "AioConnMixin must be present before psycopg2 connection in"
-                "method resolution order. Maybe base classes should be "
-                "switched.")
+                "AioConnMixin must be present before "
+                "psycopg2.extensions.connection in method resolution order. "
+                "Maybe base classes should be switched.")
 
         try:
             await wait_for(cn._start_connect_poll(), timeout)

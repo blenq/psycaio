@@ -1,9 +1,9 @@
-from psycopg2.extensions import cursor
+from psycopg2.extensions import cursor as PGCursor
 
 
 class AioCursorMixin:
     """ Mixin class to add asyncio behavior to the psycopg2
-    :py:class:`cursor` class.
+    :py:class:`psycopg2:cursor` class.
 
     This class should be not be instantiated directly. It should be used as a
     base class when implementing a custom cursor.
@@ -12,6 +12,12 @@ class AioCursorMixin:
     :py:func:`asyncio.wait_for`, ...), i.e. when a
     :py:exc:`asyncio.CancelledError` is raised during the operation, then
     psycaio will try to cancel the operation server side as well.
+
+    The execute and callproc methods can be called concurrently, but psycaio
+    will make sure that all operations for one database connection are actually
+    executed serially, because the underlying libraries can not handle multiple
+    operations concurrently. If you want more concurrency make sure to
+    use multiple database connections.
 
     """
     __module__ = 'psycaio'
@@ -52,7 +58,7 @@ class AioCursorMixin:
             await self.execute(query, variables)
 
 
-class AioCursor(AioCursorMixin, cursor):
+class AioCursor(AioCursorMixin, PGCursor):
     """The default cursor class used by psycaio.
 
     It just inherits from both :class:`AioCursorMixin <psycaio.AioCursorMixin>`

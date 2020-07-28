@@ -37,6 +37,9 @@ class ExecTestCase(IsolatedAsyncioTestCase):
         await self.cr.execute("SELECT 42")
         self.assertEqual(self.cr.fetchone()[0], 42)
 
+        await self.cr.execute("SELECT %s", (42,))
+        self.assertEqual(self.cr.fetchone(), (42,))
+
     async def test_autocommit(self):
         self.assertTrue(self.cn.autocommit)
         with self.assertRaises(ProgrammingError):
